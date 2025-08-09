@@ -1,0 +1,54 @@
+Cách sử dụng:
+1. Export dữ liệu:
+// Đơn giản nhất
+List<Employee> employees = getEmployees();
+ExcelUtils.exportToExcel(employees, "employees.xlsx");
+
+// Với tùy chỉnh
+ExcelUtils.writer("employees.xlsx")
+    .sheetName("Danh sách nhân viên")
+    .headers(Map.of(
+        "id", "Mã NV",
+        "name", "Họ tên",
+        "salary", "Lương"
+    ))
+    .dataFromObjects(employees)
+    .columnStyle("salary", CellStyle.create().bold().fillColor("FFFF00"))
+    .autoSizeColumns(true)
+    .freezeHeader(true)
+    .write();
+2. Import dữ liệu:
+// Đơn giản nhất
+List<Employee> employees = ExcelUtils.importFromExcel("employees.xlsx", Employee.class);
+
+// Với tùy chỉnh
+List<Map<String, Object>> data = ExcelUtils.reader("employees.xlsx")
+    .sheetName("Danh sách nhân viên")
+    .headerRow(0)
+    .startRow(1)
+    .columnMapping(Map.of(
+        "Mã NV", "id",
+        "Họ tên", "name"
+    ))
+    .skipEmptyRows(true)
+    .read();
+3. Xử lý với Stream:
+try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+    ExcelUtils.writer(baos)
+        .sheetName("Report")
+        .headers("STT", "Tên", "Số tiền")
+        .data(reportData)
+        .write();
+    
+    byte[] excelBytes = baos.toByteArray();
+    // Gửi qua HTTP response hoặc lưu file
+}
+Ưu điểm của class này:
+Builder Pattern: Dễ đọc và mở rộng
+Type Safety: Hỗ trợ Generic và reflection
+Flexible: Có thể làm việc với Object hoặc Map
+Performance: Sử dụng Stream API của FastExcel
+Error Handling: Xử lý lỗi một cách graceful
+Memory Efficient: Không load toàn bộ file vào memory
+Customizable: Nhiều tùy chọn styling và formatting
+Class này được thiết kế để dễ sử dụng cho cả beginners và có đủ sức mạnh cho các use case phức tạp!

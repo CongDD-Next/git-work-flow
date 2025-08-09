@@ -1,0 +1,923 @@
+package com.yourpackage.utils;
+
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.ExcelReader;
+import com.alibaba.excel.ExcelWriter;
+import com.alibaba.excel.context.AnalysisContext;
+import com.alibaba.excel.event.AnalysisEventListener;
+import com.alibaba.excel.read.listener.PageReadListener;
+import com.alibaba.excel.read.metadata.ReadSheet;
+import com.alibaba.excel.support.ExcelTypeEnum;
+import com.alibaba.excel.write.metadata.WriteSheet;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.*;
+import java.lang.reflect.Field;
+import java.math.BigDecimal;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+/**
+ * Comprehensive CSV Utilities with EasyExcel for Advanced CSV Operations
+ * 
+ * @author Expert Developer
+ * @version 1.0
+ * @since 2024
+ */
+@Slf4j
+public class EasyCSVUtils {
+    
+    private static final DateTimeFormatter DEFAULT_DATE_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    private static final DateTimeFormatter DEFAULT_DATETIME_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
+    private static final String DEFAULT_DELIMITER = ",";
+    private static final String DEFAULT_QUOTE = "\"";
+    private static final String DEFAULT_LINE_SEPARATOR = System.lineSeparator();
+    private static final Charset DEFAULT_CHARSET = StandardCharsets.UTF_8;
+    
+    // ===================== WRITER BUILDERS =====================
+    
+    /**
+     * CSV Writer Builder with advanced features
+     */
+    public static class CSVWriterBuilder {
+        private final String fileName;
+        private final OutputStream outputStream;
+        private Class<?> dataClass;
+        private List<String> headers;
+        private String delimiter = DEFAULT_DELIMITER;
+        private String quote = DEFAULT_QUOTE;
+        private String lineSeparator = DEFAULT_LINE_SEPARATOR;
+        private Charset charset = DEFAULT_CHARSET;
+        private boolean autoCloseStream = true;
+        private boolean includeHeaders = true;
+        private boolean quoteAll = false;
+        private String nullValue = "";
+        
+        private CSVWriterBuilder(String fileName) {
+            this.fileName = fileName;
+            this.outputStream = null;
+        }
+        
+        private CSVWriterBuilder(OutputStream outputStream) {
+            this.fileName = null;
+            this.outputStream = outputStream;
+        }
+        
+        public CSVWriterBuilder dataClass(Class<?> dataClass) {
+            this.dataClass = dataClass;
+            return this;
+        }
+        
+        public CSVWriterBuilder headers(String... headers) {
+            this.headers = Arrays.asList(headers);
+            return this;
+        }
+        
+        public CSVWriterBuilder headers(List<String> headers) {
+            this.headers = new ArrayList<>(headers);
+            return this;
+        }
+        
+        public CSVWriterBuilder delimiter(String delimiter) {
+            this.delimiter = delimiter;
+            return this;
+        }
+        
+        public CSVWriterBuilder quote(String quote) {
+            this.quote = quote;
+            return this;
+        }
+        
+        public CSVWriterBuilder lineSeparator(String lineSeparator) {
+            this.lineSeparator = lineSeparator;
+            return this;
+        }
+        
+        public CSVWriterBuilder charset(Charset charset) {
+            this.charset = charset;
+            return this;
+        }
+        
+        public CSVWriterBuilder autoCloseStream(boolean autoClose) {
+            this.autoCloseStream = autoClose;
+            return this;
+        }
+        
+        public CSVWriterBuilder includeHeaders(boolean include) {
+            this.includeHeaders = include;
+            return this;
+        }
+        
+        public CSVWriterBuilder quoteAll(boolean quoteAll) {
+            this.quoteAll = quoteAll;
+            return this;
+        }
+        
+        public CSVWriterBuilder nullValue(String nullValue) {
+            this.nullValue = nullValue;
+            return this;
+        }
+        
+        public <T> void write(List<T> data) {
+            try {
+                if (fileName != null) {
+                    try (FileOutputStream fos = new FileOutputStream(fileName);
+                         OutputStreamWriter osw = new OutputStreamWriter(fos, charset);
+                         BufferedWriter writer = new BufferedWriter(osw)) {
+                        writeData(writer, data);
+                    }
+                } else {
+                    try (OutputStreamWriter osw = new OutputStreamWriter(outputStream, charset);
+                         BufferedWriter writer = new BufferedWriter(osw)) {
+                        writeData(writer, data);
+                        if (!autoCloseStream) {
+                            writer.flush();
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                log.error("Error writing CSV data", e);
+                throw new RuntimeException("Failed to write CSV", e);
+            }
+        }
+        
+        public AdvancedCSVWriter advancedWriter() {
+            return new AdvancedCSVWriter(this);
+        }
+        
+        private <T> void writeData(BufferedWriter writer, List<T> data) throws IOException {
+            // Write headers
+            if (includeHeaders && headers != null && !headers.isEmpty()) {
+                writeRow(writer, headers.stream().map(Object::toString).collect(Collectors.toList()));
+            } else if (includeHeaders && dataClass != null) {
+                List<String> classHeaders = generateHeadersFromClass(dataClass);
+                writeRow(writer, classHeaders);
+            }
+            
+            // Write data
+            for (T item : data) {
+                List<String> row = convertObjectToRow(item);
+                writeRow(writer, row);
+            }
+        }
+        
+        private void writeRow(BufferedWriter writer, List<String> row) throws IOException {
+            List<String> formattedRow = row.stream()
+                .map(this::formatValue)
+                .collect(Collectors.toList());
+            
+            writer.write(String.join(delimiter, formattedRow));
+            writer.write(lineSeparator);
+        }
+        
+        private String formatValue(String value) {
+            if (value == null) {
+                return nullValue;
+            }
+            
+            String cleanValue = value.replace(quote, quote + quote); // Escape quotes
+            
+            if (quoteAll || needsQuoting(value)) {
+                return quote + cleanValue + quote;
+            }
+            
+            return cleanValue;
+        }
+        
+        private boolean needsQuoting(String value) {
+            return value.contains(delimiter) || 
+                   value.contains(quote) || 
+                   value.contains("\n") || 
+                   value.contains("\r") ||
+                   value.trim().length() != value.length();
+        }
+        
+        private <T> List<String> convertObjectToRow(T obj) {
+            if (obj instanceof List) {
+                return ((List<?>) obj).stream()
+                    .map(item -> item != null ? item.toString() : nullValue)
+                    .collect(Collectors.toList());
+            }
+            
+            List<String> row = new ArrayList<>();
+            if (dataClass != null) {
+                Field[] fields = dataClass.getDeclaredFields();
+                for (Field field : fields) {
+                    try {
+                        field.setAccessible(true);
+                        Object value = field.get(obj);
+                        row.add(convertValue(value));
+                    } catch (IllegalAccessException e) {
+                        row.add(nullValue);
+                    }
+                }
+            } else {
+                // Try to convert using reflection
+                Field[] fields = obj.getClass().getDeclaredFields();
+                for (Field field : fields) {
+                    try {
+                        field.setAccessible(true);
+                        Object value = field.get(obj);
+                        row.add(convertValue(value));
+                    } catch (IllegalAccessException e) {
+                        row.add(nullValue);
+                    }
+                }
+            }
+            return row;
+        }
+        
+        private String convertValue(Object value) {
+            if (value == null) {
+                return nullValue;
+            } else if (value instanceof LocalDate) {
+                return ((LocalDate) value).format(DEFAULT_DATE_FORMAT);
+            } else if (value instanceof LocalDateTime) {
+                return ((LocalDateTime) value).format(DEFAULT_DATETIME_FORMAT);
+            } else {
+                return value.toString();
+            }
+        }
+        
+        private List<String> generateHeadersFromClass(Class<?> clazz) {
+            return Arrays.stream(clazz.getDeclaredFields())
+                .map(field -> camelCaseToTitle(field.getName()))
+                .collect(Collectors.toList());
+        }
+    }
+    
+    /**
+     * Advanced CSV Writer for complex operations
+     */
+    public static class AdvancedCSVWriter implements AutoCloseable {
+        private final BufferedWriter writer;
+        private final CSVWriterBuilder config;
+        private boolean headerWritten = false;
+        private int currentRow = 0;
+        
+        private AdvancedCSVWriter(CSVWriterBuilder builder) {
+            this.config = builder;
+            try {
+                if (builder.fileName != null) {
+                    FileOutputStream fos = new FileOutputStream(builder.fileName);
+                    OutputStreamWriter osw = new OutputStreamWriter(fos, builder.charset);
+                    this.writer = new BufferedWriter(osw);
+                } else {
+                    OutputStreamWriter osw = new OutputStreamWriter(builder.outputStream, builder.charset);
+                    this.writer = new BufferedWriter(osw);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to create CSV writer", e);
+            }
+        }
+        
+        public AdvancedCSVWriter writeHeaders(String... headers) throws IOException {
+            return writeHeaders(Arrays.asList(headers));
+        }
+        
+        public AdvancedCSVWriter writeHeaders(List<String> headers) throws IOException {
+            if (!headerWritten && config.includeHeaders) {
+                writeRow(headers);
+                headerWritten = true;
+            }
+            return this;
+        }
+        
+        public AdvancedCSVWriter writeRow(String... values) throws IOException {
+            return writeRow(Arrays.asList(values));
+        }
+        
+        public AdvancedCSVWriter writeRow(List<String> values) throws IOException {
+            List<String> formattedRow = values.stream()
+                .map(config::formatValue)
+                .collect(Collectors.toList());
+            
+            writer.write(String.join(config.delimiter, formattedRow));
+            writer.write(config.lineSeparator);
+            currentRow++;
+            return this;
+        }
+        
+        public <T> AdvancedCSVWriter writeObject(T obj) throws IOException {
+            List<String> row = config.convertObjectToRow(obj);
+            return writeRow(row);
+        }
+        
+        public <T> AdvancedCSVWriter writeObjects(List<T> objects) throws IOException {
+            for (T obj : objects) {
+                writeObject(obj);
+            }
+            return this;
+        }
+        
+        public AdvancedCSVWriter writeCell(int row, int col, String value) throws IOException {
+            // For CSV, we need to buffer rows and write them in order
+            // This is a simplified implementation
+            if (row == currentRow) {
+                // If it's the current row, we can append
+                writeRow(Collections.singletonList(value));
+            } else {
+                log.warn("Writing to specific cell position in CSV is limited. Current row: {}, requested row: {}", 
+                    currentRow, row);
+                writeRow(Collections.singletonList(value));
+            }
+            return this;
+        }
+        
+        public AdvancedCSVWriter newLine() throws IOException {
+            writer.write(config.lineSeparator);
+            currentRow++;
+            return this;
+        }
+        
+        public AdvancedCSVWriter flush() throws IOException {
+            writer.flush();
+            return this;
+        }
+        
+        public int getCurrentRow() {
+            return currentRow;
+        }
+        
+        @Override
+        public void close() throws IOException {
+            if (writer != null) {
+                writer.close();
+            }
+        }
+    }
+    
+    // ===================== TEMPLATE OPERATIONS =====================
+    
+    /**
+     * CSV Template Fill Builder
+     */
+    public static class CSVTemplateFillBuilder {
+        private final String templatePath;
+        private final String outputPath;
+        private final OutputStream outputStream;
+        private Charset charset = DEFAULT_CHARSET;
+        private Map<String, Object> placeholderData = new HashMap<>();
+        private Map<Integer, List<String>> customRows = new HashMap<>();
+        private Map<String, String> cellReplacements = new HashMap<>();
+        private String delimiter = DEFAULT_DELIMITER;
+        private Pattern placeholderPattern = Pattern.compile("\\{\\{(.*?)\\}\\}");
+        
+        private CSVTemplateFillBuilder(String templatePath, String outputPath) {
+            this.templatePath = templatePath;
+            this.outputPath = outputPath;
+            this.outputStream = null;
+        }
+        
+        private CSVTemplateFillBuilder(String templatePath, OutputStream outputStream) {
+            this.templatePath = templatePath;
+            this.outputPath = null;
+            this.outputStream = outputStream;
+        }
+        
+        public CSVTemplateFillBuilder charset(Charset charset) {
+            this.charset = charset;
+            return this;
+        }
+        
+        public CSVTemplateFillBuilder delimiter(String delimiter) {
+            this.delimiter = delimiter;
+            return this;
+        }
+        
+        public CSVTemplateFillBuilder placeholderPattern(String pattern) {
+            this.placeholderPattern = Pattern.compile(pattern);
+            return this;
+        }
+        
+        public CSVTemplateFillBuilder fillData(String key, Object value) {
+            this.placeholderData.put(key, value);
+            return this;
+        }
+        
+        public CSVTemplateFillBuilder fillData(Map<String, Object> data) {
+            this.placeholderData.putAll(data);
+            return this;
+        }
+        
+        public CSVTemplateFillBuilder replaceCell(String oldValue, String newValue) {
+            this.cellReplacements.put(oldValue, newValue);
+            return this;
+        }
+        
+        public CSVTemplateFillBuilder insertRowAt(int position, String... values) {
+            this.customRows.put(position, Arrays.asList(values));
+            return this;
+        }
+        
+        public CSVTemplateFillBuilder insertRowAt(int position, List<String> values) {
+            this.customRows.put(position, new ArrayList<>(values));
+            return this;
+        }
+        
+        public void execute() {
+            try {
+                List<String> templateLines = readTemplate();
+                List<String> processedLines = processTemplate(templateLines);
+                writeOutput(processedLines);
+            } catch (IOException e) {
+                log.error("Error executing CSV template fill", e);
+                throw new RuntimeException("Template fill failed", e);
+            }
+        }
+        
+        private List<String> readTemplate() throws IOException {
+            return Files.readAllLines(Paths.get(templatePath), charset);
+        }
+        
+        private List<String> processTemplate(List<String> templateLines) {
+            List<String> result = new ArrayList<>();
+            
+            for (int i = 0; i < templateLines.size(); i++) {
+                // Insert custom rows if specified for this position
+                if (customRows.containsKey(i)) {
+                    String customRow = String.join(delimiter, customRows.get(i));
+                    result.add(customRow);
+                }
+                
+                String line = templateLines.get(i);
+                String processedLine = processLine(line);
+                result.add(processedLine);
+            }
+            
+            // Add any remaining custom rows
+            for (Map.Entry<Integer, List<String>> entry : customRows.entrySet()) {
+                if (entry.getKey() >= templateLines.size()) {
+                    String customRow = String.join(delimiter, entry.getValue());
+                    result.add(customRow);
+                }
+            }
+            
+            return result;
+        }
+        
+        private String processLine(String line) {
+            String processedLine = line;
+            
+            // Replace placeholders
+            for (Map.Entry<String, Object> entry : placeholderData.entrySet()) {
+                String placeholder = "{{" + entry.getKey() + "}}";
+                String value = entry.getValue() != null ? entry.getValue().toString() : "";
+                processedLine = processedLine.replace(placeholder, value);
+            }
+            
+            // Replace cells
+            for (Map.Entry<String, String> entry : cellReplacements.entrySet()) {
+                processedLine = processedLine.replace(entry.getKey(), entry.getValue());
+            }
+            
+            // Process with regex pattern
+            processedLine = placeholderPattern.matcher(processedLine).replaceAll(matchResult -> {
+                String key = matchResult.group(1);
+                Object value = placeholderData.get(key);
+                return value != null ? value.toString() : matchResult.group(0);
+            });
+            
+            return processedLine;
+        }
+        
+        private void writeOutput(List<String> lines) throws IOException {
+            if (outputPath != null) {
+                Files.write(Paths.get(outputPath), lines, charset, 
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            } else {
+                try (OutputStreamWriter osw = new OutputStreamWriter(outputStream, charset);
+                     BufferedWriter writer = new BufferedWriter(osw)) {
+                    for (String line : lines) {
+                        writer.write(line);
+                        writer.newLine();
+                    }
+                }
+            }
+        }
+    }
+    
+    // ===================== READER OPERATIONS =====================
+    
+    /**
+     * CSV Reader Builder
+     */
+    public static class CSVReaderBuilder {
+        private final String fileName;
+        private final InputStream inputStream;
+        private Class<?> dataClass;
+        private Charset charset = DEFAULT_CHARSET;
+        private String delimiter = DEFAULT_DELIMITER;
+        private String quote = DEFAULT_QUOTE;
+        private boolean hasHeaders = true;
+        private int skipLines = 0;
+        private boolean autoCloseStream = true;
+        private Map<String, String> columnMapping = new HashMap<>();
+        
+        private CSVReaderBuilder(String fileName) {
+            this.fileName = fileName;
+            this.inputStream = null;
+        }
+        
+        private CSVReaderBuilder(InputStream inputStream) {
+            this.fileName = null;
+            this.inputStream = inputStream;
+        }
+        
+        public CSVReaderBuilder dataClass(Class<?> dataClass) {
+            this.dataClass = dataClass;
+            return this;
+        }
+        
+        public CSVReaderBuilder charset(Charset charset) {
+            this.charset = charset;
+            return this;
+        }
+        
+        public CSVReaderBuilder delimiter(String delimiter) {
+            this.delimiter = delimiter;
+            return this;
+        }
+        
+        public CSVReaderBuilder quote(String quote) {
+            this.quote = quote;
+            return this;
+        }
+        
+        public CSVReaderBuilder hasHeaders(boolean hasHeaders) {
+            this.hasHeaders = hasHeaders;
+            return this;
+        }
+        
+        public CSVReaderBuilder skipLines(int skipLines) {
+            this.skipLines = skipLines;
+            return this;
+        }
+        
+        public CSVReaderBuilder autoCloseStream(boolean autoClose) {
+            this.autoCloseStream = autoClose;
+            return this;
+        }
+        
+        public CSVReaderBuilder columnMapping(Map<String, String> mapping) {
+            this.columnMapping.putAll(mapping);
+            return this;
+        }
+        
+        public <T> List<T> read() {
+            List<T> result = new ArrayList<>();
+            read(result::addAll);
+            return result;
+        }
+        
+        public <T> void read(Consumer<List<T>> dataConsumer) {
+            read(dataConsumer, 1000);
+        }
+        
+        public <T> void read(Consumer<List<T>> dataConsumer, int batchSize) {
+            try {
+                // Use EasyExcel CSV support
+                com.alibaba.excel.read.builder.ExcelReaderBuilder builder = createReaderBuilder();
+                
+                List<T> batch = new ArrayList<>();
+                AtomicInteger count = new AtomicInteger(0);
+                
+                builder.registerReadListener(new AnalysisEventListener<T>() {
+                    @Override
+                    public void invoke(T data, AnalysisContext context) {
+                        batch.add(data);
+                        if (batch.size() >= batchSize) {
+                            dataConsumer.accept(new ArrayList<>(batch));
+                            batch.clear();
+                        }
+                    }
+                    
+                    @Override
+                    public void doAfterAllAnalysed(AnalysisContext context) {
+                        if (!batch.isEmpty()) {
+                            dataConsumer.accept(batch);
+                        }
+                    }
+                });
+                
+                try (ExcelReader excelReader = builder.build()) {
+                    ReadSheet readSheet = EasyExcel.readSheet(0)
+                        .headRowNumber(hasHeaders ? 1 : 0)
+                        .build();
+                    excelReader.read(readSheet);
+                }
+            } catch (Exception e) {
+                log.error("Error reading CSV data", e);
+                throw new RuntimeException("Failed to read CSV", e);
+            }
+        }
+        
+        public List<List<String>> readAsRows() {
+            List<List<String>> result = new ArrayList<>();
+            
+            try (BufferedReader reader = createBufferedReader()) {
+                String line;
+                int lineNumber = 0;
+                
+                while ((line = reader.readLine()) != null) {
+                    if (lineNumber < skipLines) {
+                        lineNumber++;
+                        continue;
+                    }
+                    
+                    List<String> row = parseCsvLine(line);
+                    result.add(row);
+                    lineNumber++;
+                }
+            } catch (IOException e) {
+                log.error("Error reading CSV as rows", e);
+                throw new RuntimeException("Failed to read CSV", e);
+            }
+            
+            return result;
+        }
+        
+        public Map<String, List<String>> readAsMap() {
+            List<List<String>> rows = readAsRows();
+            Map<String, List<String>> result = new LinkedHashMap<>();
+            
+            if (rows.isEmpty()) {
+                return result;
+            }
+            
+            List<String> headers;
+            List<List<String>> dataRows;
+            
+            if (hasHeaders) {
+                headers = rows.get(0);
+                dataRows = rows.subList(1, rows.size());
+            } else {
+                // Generate column names
+                headers = IntStream.range(0, rows.get(0).size())
+                    .mapToObj(i -> "Column_" + i)
+                    .collect(Collectors.toList());
+                dataRows = rows;
+            }
+            
+            for (String header : headers) {
+                result.put(header, new ArrayList<>());
+            }
+            
+            for (List<String> row : dataRows) {
+                for (int i = 0; i < headers.size() && i < row.size(); i++) {
+                    result.get(headers.get(i)).add(row.get(i));
+                }
+            }
+            
+            return result;
+        }
+        
+        private com.alibaba.excel.read.builder.ExcelReaderBuilder createReaderBuilder() {
+            com.alibaba.excel.read.builder.ExcelReaderBuilder builder;
+            
+            if (fileName != null) {
+                builder = EasyExcel.read(fileName);
+            } else {
+                builder = EasyExcel.read(inputStream);
+                if (!autoCloseStream) {
+                    builder.autoCloseStream(false);
+                }
+            }
+            
+            if (dataClass != null) {
+                builder.head(dataClass);
+            }
+            
+            return builder.excelType(ExcelTypeEnum.CSV);
+        }
+        
+        private BufferedReader createBufferedReader() throws IOException {
+            if (fileName != null) {
+                return Files.newBufferedReader(Paths.get(fileName), charset);
+            } else {
+                return new BufferedReader(new InputStreamReader(inputStream, charset));
+            }
+        }
+        
+        private List<String> parseCsvLine(String line) {
+            List<String> result = new ArrayList<>();
+            boolean inQuotes = false;
+            StringBuilder current = new StringBuilder();
+            
+            for (int i = 0; i < line.length(); i++) {
+                char c = line.charAt(i);
+                
+                if (c == quote.charAt(0)) {
+                    if (inQuotes && i + 1 < line.length() && line.charAt(i + 1) == quote.charAt(0)) {
+                        // Escaped quote
+                        current.append(c);
+                        i++; // Skip next quote
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                } else if (c == delimiter.charAt(0) && !inQuotes) {
+                    result.add(current.toString());
+                    current.setLength(0);
+                } else {
+                    current.append(c);
+                }
+            }
+            
+            result.add(current.toString());
+            return result;
+        }
+    }
+    
+    // ===================== UTILITY METHODS =====================
+    
+    /**
+     * Create CSV writer for file
+     */
+    public static CSVWriterBuilder writer(String fileName) {
+        return new CSVWriterBuilder(fileName);
+    }
+    
+    /**
+     * Create CSV writer for stream
+     */
+    public static CSVWriterBuilder writer(OutputStream outputStream) {
+        return new CSVWriterBuilder(outputStream);
+    }
+    
+    /**
+     * Create CSV reader for file
+     */
+    public static CSVReaderBuilder reader(String fileName) {
+        return new CSVReaderBuilder(fileName);
+    }
+    
+    /**
+     * Create CSV reader for stream
+     */
+    public static CSVReaderBuilder reader(InputStream inputStream) {
+        return new CSVReaderBuilder(inputStream);
+    }
+    
+    /**
+     * Create template fill builder
+     */
+    public static CSVTemplateFillBuilder templateFill(String templatePath, String outputPath) {
+        return new CSVTemplateFillBuilder(templatePath, outputPath);
+    }
+    
+    /**
+     * Create template fill builder with stream
+     */
+    public static CSVTemplateFillBuilder templateFill(String templatePath, OutputStream outputStream) {
+        return new CSVTemplateFillBuilder(templatePath, outputStream);
+    }
+    
+    /**
+     * Quick export to CSV
+     */
+    public static <T> void exportToCSV(List<T> data, String fileName, Class<T> clazz) {
+        writer(fileName)
+            .dataClass(clazz)
+            .includeHeaders(true)
+            .write(data);
+    }
+    
+    /**
+     * Quick import from CSV
+     */
+    public static <T> List<T> importFromCSV(String fileName, Class<T> clazz) {
+        return reader(fileName)
+            .dataClass(clazz)
+            .hasHeaders(true)
+            .read();
+    }
+    
+    /**
+     * Convert CSV to List of Maps
+     */
+    public static List<Map<String, String>> csvToMapList(String fileName) {
+        Map<String, List<String>> columnData = reader(fileName)
+            .hasHeaders(true)
+            .readAsMap();
+        
+        if (columnData.isEmpty()) {
+            return new ArrayList<>();
+        }
+        
+        List<String> headers = new ArrayList<>(columnData.keySet());
+        int rowCount = columnData.values().iterator().next().size();
+        
+        List<Map<String, String>> result = new ArrayList<>();
+        for (int i = 0; i < rowCount; i++) {
+            Map<String, String> row = new LinkedHashMap<>();
+            for (String header : headers) {
+                List<String> columnValues = columnData.get(header);
+                String value = i < columnValues.size() ? columnValues.get(i) : "";
+                row.put(header, value);
+            }
+            result.add(row);
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Convert List of Objects to CSV string
+     */
+    public static <T> String objectsToCSV(List<T> objects, Class<T> clazz) {
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            writer(baos)
+                .dataClass(clazz)
+                .includeHeaders(true)
+                .write(objects);
+            return baos.toString(StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to convert objects to CSV", e);
+        }
+    }
+    
+    // ===================== HELPER METHODS =====================
+    
+    private static String camelCaseToTitle(String camelCase) {
+        return camelCase.replaceAll("([a-z])([A-Z])", "$1 $2")
+                       .substring(0, 1).toUpperCase() + 
+                       camelCase.replaceAll("([a-z])([A-Z])", "$1 $2").substring(1);
+    }
+    
+    /**
+     * Validate CSV format
+     */
+    public static boolean isValidCSV(String fileName) {
+        try {
+            List<List<String>> rows = reader(fileName).readAsRows();
+            if (rows.isEmpty()) {
+                return true; // Empty file is valid
+            }
+            
+            int expectedColumns = rows.get(0).size();
+            return rows.stream().allMatch(row -> row.size() == expectedColumns);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+    
+    /**
+     * Get CSV statistics
+     */
+    public static CSVStatistics getStatistics(String fileName) {
+        try {
+            List<List<String>> rows = reader(fileName).readAsRows();
+            
+            if (rows.isEmpty()) {
+                return new CSVStatistics(0, 0, 0);
+            }
+            
+            int totalRows = rows.size();
+            int totalColumns = rows.get(0).size();
+            long totalCells = rows.stream().mapToInt(List::size).sum();
+            
+            return new CSVStatistics(totalRows, totalColumns, totalCells);
+        } catch (Exception e) {
+            log.error("Error getting CSV statistics", e);
+            return new CSVStatistics(0, 0, 0);
+        }
+    }
+    
+    /**
+     * CSV Statistics holder
+     */
+    public static class CSVStatistics {
+        private final int rows;
+        private final int columns;
+        private final long cells;
+        
+        public CSVStatistics(int rows, int columns, long cells) {
+            this.rows = rows;
+            this.columns = columns;
+            this.cells = cells;
+        }
+        
+        public int getRows() { return rows; }
+        public int getColumns() { return columns; }
+        public long getCells() { return cells; }
+        
+        @Override
+        public String toString() {
+            return String.format("CSVStatistics{rows=%d, columns=%d, cells=%d}", rows, columns, cells);
+        }
+    }
+}
+

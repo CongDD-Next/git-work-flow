@@ -1,0 +1,707 @@
+package com.yourpackage.utils;
+
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.ExcelReader;
+import com.alibaba.excel.ExcelWriter;
+import com.alibaba.excel.context.AnalysisContext;
+import com.alibaba.excel.enums.CellDataTypeEnum;
+import com.alibaba.excel.event.AnalysisEventListener;
+import com.alibaba.excel.metadata.data.*;
+import com.alibaba.excel.read.listener.PageReadListener;
+import com.alibaba.excel.read.metadata.ReadSheet;
+import com.alibaba.excel.util.ListUtils;
+import com.alibaba.excel.write.builder.ExcelWriterBuilder;
+import com.alibaba.excel.write.builder.ExcelWriterSheetBuilder;
+import com.alibaba.excel.write.handler.CellWriteHandler;
+import com.alibaba.excel.write.handler.context.CellWriteHandlerContext;
+import com.alibaba.excel.write.metadata.WriteSheet;
+import com.alibaba.excel.write.metadata.fill.FillConfig;
+import com.alibaba.excel.write.metadata.fill.FillWrapper;
+import com.alibaba.excel.write.metadata.style.WriteCellStyle;
+import com.alibaba.excel.write.metadata.style.WriteFont;
+import com.alibaba.excel.write.style.HorizontalCellStyleStrategy;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.ss.util.CellRangeAddress;
+
+import java.io.*;
+import java.lang.reflect.Field;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+/**
+ * Comprehensive EasyExcel Utilities for Advanced Excel Operations
+ * 
+ * @author Expert Developer
+ * @version 1.0
+ * @since 2024
+ */
+@Slf4j
+public class EasyExcelUtils {
+    
+    private static final DateTimeFormatter DEFAULT_DATE_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    private static final DateTimeFormatter DEFAULT_DATETIME_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
+    
+    // ===================== WRITER BUILDERS =====================
+    
+    /**
+     * Standard Excel Writer Builder
+     */
+    public static class ExcelWriterBuilder {
+        private final String fileName;
+        private final OutputStream outputStream;
+        private String sheetName = "Sheet1";
+        private Class<?> dataClass;
+        private List<List<Object>> headList;
+        private boolean autoCloseStream = true;
+        private List<CellWriteHandler> writeHandlers = new ArrayList<>();
+        private HorizontalCellStyleStrategy styleStrategy;
+        
+        private ExcelWriterBuilder(String fileName) {
+            this.fileName = fileName;
+            this.outputStream = null;
+        }
+        
+        private ExcelWriterBuilder(OutputStream outputStream) {
+            this.fileName = null;
+            this.outputStream = outputStream;
+        }
+        
+        public ExcelWriterBuilder sheetName(String sheetName) {
+            this.sheetName = sheetName;
+            return this;
+        }
+        
+        public ExcelWriterBuilder dataClass(Class<?> dataClass) {
+            this.dataClass = dataClass;
+            return this;
+        }
+        
+        public ExcelWriterBuilder headers(String... headers) {
+            this.headList = Arrays.stream(headers)
+                .map(Collections::singletonList)
+                .collect(Collectors.toList());
+            return this;
+        }
+        
+        public ExcelWriterBuilder headers(List<List<String>> complexHeaders) {
+            this.headList = complexHeaders.stream()
+                .map(ArrayList::new)
+                .collect(Collectors.toList());
+            return this;
+        }
+        
+        public ExcelWriterBuilder autoCloseStream(boolean autoClose) {
+            this.autoCloseStream = autoClose;
+            return this;
+        }
+        
+        public ExcelWriterBuilder addWriteHandler(CellWriteHandler handler) {
+            this.writeHandlers.add(handler);
+            return this;
+        }
+        
+        public ExcelWriterBuilder styleStrategy(HorizontalCellStyleStrategy strategy) {
+            this.styleStrategy = strategy;
+            return this;
+        }
+        
+        public ExcelWriterBuilder defaultStyle() {
+            // Header style
+            WriteCellStyle headWriteCellStyle = new WriteCellStyle();
+            headWriteCellStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            WriteFont headWriteFont = new WriteFont();
+            headWriteFont.setFontHeightInPoints((short) 12);
+            headWriteFont.setBold(true);
+            headWriteCellStyle.setWriteFont(headWriteFont);
+            headWriteCellStyle.setHorizontalAlignment(HorizontalAlignment.CENTER);
+            headWriteCellStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+            
+            // Content style
+            WriteCellStyle contentWriteCellStyle = new WriteCellStyle();
+            WriteFont contentWriteFont = new WriteFont();
+            contentWriteFont.setFontHeightInPoints((short) 11);
+            contentWriteCellStyle.setWriteFont(contentWriteFont);
+            contentWriteCellStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+            
+            this.styleStrategy = new HorizontalCellStyleStrategy(headWriteCellStyle, contentWriteCellStyle);
+            return this;
+        }
+        
+        public <T> void write(List<T> data) {
+            ExcelWriterBuilder builder = createBuilder();
+            
+            if (styleStrategy != null) {
+                builder.registerWriteHandler(styleStrategy);
+            }
+            
+            writeHandlers.forEach(builder::registerWriteHandler);
+            
+            try (ExcelWriter excelWriter = builder.build()) {
+                WriteSheet writeSheet = EasyExcel.writerSheet(0, sheetName)
+                    .head(headList)
+                    .build();
+                
+                if (dataClass != null) {
+                    writeSheet = EasyExcel.writerSheet(0, sheetName, dataClass).build();
+                }
+                
+                excelWriter.write(data, writeSheet);
+            }
+        }
+        
+        public AdvancedWriter advancedWriter() {
+            return new AdvancedWriter(this);
+        }
+        
+        private com.alibaba.excel.write.builder.ExcelWriterBuilder createBuilder() {
+            if (fileName != null) {
+                return EasyExcel.write(fileName);
+            } else {
+                var builder = EasyExcel.write(outputStream);
+                return autoCloseStream ? builder : builder.autoCloseStream(false);
+            }
+        }
+    }
+    
+    /**
+     * Advanced Writer for complex operations
+     */
+    public static class AdvancedWriter implements AutoCloseable {
+        private final ExcelWriter excelWriter;
+        private final Map<Integer, WriteSheet> sheets = new HashMap<>();
+        private int currentSheetIndex = 0;
+        
+        private AdvancedWriter(ExcelWriterBuilder builder) {
+            com.alibaba.excel.write.builder.ExcelWriterBuilder easyBuilder = builder.createBuilder();
+            
+            if (builder.styleStrategy != null) {
+                easyBuilder.registerWriteHandler(builder.styleStrategy);
+            }
+            
+            builder.writeHandlers.forEach(easyBuilder::registerWriteHandler);
+            
+            this.excelWriter = easyBuilder.build();
+            
+            // Create default sheet
+            WriteSheet defaultSheet = EasyExcel.writerSheet(0, builder.sheetName)
+                .head(builder.headList)
+                .build();
+            
+            if (builder.dataClass != null) {
+                defaultSheet = EasyExcel.writerSheet(0, builder.sheetName, builder.dataClass).build();
+            }
+            
+            sheets.put(0, defaultSheet);
+        }
+        
+        public AdvancedWriter addSheet(String sheetName, Class<?> dataClass) {
+            currentSheetIndex++;
+            WriteSheet sheet = EasyExcel.writerSheet(currentSheetIndex, sheetName, dataClass).build();
+            sheets.put(currentSheetIndex, sheet);
+            return this;
+        }
+        
+        public AdvancedWriter addSheet(String sheetName, List<List<String>> headers) {
+            currentSheetIndex++;
+            WriteSheet sheet = EasyExcel.writerSheet(currentSheetIndex, sheetName)
+                .head(headers.stream().map(ArrayList::new).collect(Collectors.toList()))
+                .build();
+            sheets.put(currentSheetIndex, sheet);
+            return this;
+        }
+        
+        public <T> AdvancedWriter writeToSheet(int sheetIndex, List<T> data) {
+            WriteSheet sheet = sheets.get(sheetIndex);
+            if (sheet == null) {
+                throw new IllegalArgumentException("Sheet not found: " + sheetIndex);
+            }
+            excelWriter.write(data, sheet);
+            return this;
+        }
+        
+        public <T> AdvancedWriter writeToCurrentSheet(List<T> data) {
+            return writeToSheet(currentSheetIndex, data);
+        }
+        
+        public AdvancedWriter writeCellValue(int sheetIndex, int row, int col, Object value) {
+            WriteSheet sheet = sheets.get(sheetIndex);
+            if (sheet == null) {
+                throw new IllegalArgumentException("Sheet not found: " + sheetIndex);
+            }
+            
+            List<List<Object>> data = Collections.singletonList(
+                Collections.singletonList(value)
+            );
+            
+            // Use fill to write to specific cell
+            excelWriter.write(data, sheet);
+            return this;
+        }
+        
+        @Override
+        public void close() {
+            if (excelWriter != null) {
+                excelWriter.finish();
+            }
+        }
+    }
+    
+    // ===================== TEMPLATE OPERATIONS =====================
+    
+    /**
+     * Template Fill Builder for complex template operations
+     */
+    public static class TemplateFillBuilder {
+        private final String templatePath;
+        private final String outputPath;
+        private final OutputStream outputStream;
+        private int sheetIndex = 0;
+        private String sheetName;
+        private Map<String, Object> singleData = new HashMap<>();
+        private Map<String, List<?>> listData = new HashMap<>();
+        private FillConfig fillConfig;
+        private List<CellPosition> customCells = new ArrayList<>();
+        
+        private TemplateFillBuilder(String templatePath, String outputPath) {
+            this.templatePath = templatePath;
+            this.outputPath = outputPath;
+            this.outputStream = null;
+        }
+        
+        private TemplateFillBuilder(String templatePath, OutputStream outputStream) {
+            this.templatePath = templatePath;
+            this.outputPath = null;
+            this.outputStream = outputStream;
+        }
+        
+        public TemplateFillBuilder sheet(int sheetIndex) {
+            this.sheetIndex = sheetIndex;
+            return this;
+        }
+        
+        public TemplateFillBuilder sheet(String sheetName) {
+            this.sheetName = sheetName;
+            return this;
+        }
+        
+        public TemplateFillBuilder fillData(String key, Object value) {
+            this.singleData.put(key, value);
+            return this;
+        }
+        
+        public TemplateFillBuilder fillData(Map<String, Object> data) {
+            this.singleData.putAll(data);
+            return this;
+        }
+        
+        public TemplateFillBuilder fillListData(String key, List<?> data) {
+            this.listData.put(key, data);
+            return this;
+        }
+        
+        public TemplateFillBuilder fillConfig(FillConfig config) {
+            this.fillConfig = config;
+            return this;
+        }
+        
+        public TemplateFillBuilder autoDirection() {
+            if (fillConfig == null) {
+                fillConfig = FillConfig.builder().direction(WriteDirectionEnum.VERTICAL).build();
+            }
+            return this;
+        }
+        
+        public TemplateFillBuilder writeCell(int row, int col, Object value) {
+            customCells.add(new CellPosition(row, col, value));
+            return this;
+        }
+        
+        public TemplateFillBuilder writeCell(String cellRef, Object value) {
+            // Parse cell reference like "A1", "B5"
+            CellPosition pos = parseCellReference(cellRef, value);
+            customCells.add(pos);
+            return this;
+        }
+        
+        public void execute() {
+            try {
+                com.alibaba.excel.write.builder.ExcelWriterBuilder builder = outputPath != null 
+                    ? EasyExcel.write(outputPath).withTemplate(templatePath)
+                    : EasyExcel.write(outputStream).withTemplate(templatePath);
+                
+                // Add custom cell write handler for individual cells
+                if (!customCells.isEmpty()) {
+                    builder.registerWriteHandler(new CustomCellWriteHandler(customCells));
+                }
+                
+                try (ExcelWriter excelWriter = builder.build()) {
+                    WriteSheet writeSheet = sheetName != null 
+                        ? EasyExcel.writerSheet(sheetName).build()
+                        : EasyExcel.writerSheet(sheetIndex).build();
+                    
+                    // Fill single data
+                    if (!singleData.isEmpty()) {
+                        excelWriter.fill(singleData, writeSheet);
+                    }
+                    
+                    // Fill list data
+                    for (Map.Entry<String, List<?>> entry : listData.entrySet()) {
+                        FillWrapper fillWrapper = new FillWrapper(entry.getKey(), entry.getValue());
+                        excelWriter.fill(fillWrapper, fillConfig, writeSheet);
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Error executing template fill", e);
+                throw new RuntimeException("Template fill failed", e);
+            }
+        }
+        
+        private CellPosition parseCellReference(String cellRef, Object value) {
+            // Simple parser for "A1" format
+            cellRef = cellRef.toUpperCase().trim();
+            int col = 0;
+            int row = 0;
+            
+            int i = 0;
+            // Parse column letters
+            while (i < cellRef.length() && Character.isLetter(cellRef.charAt(i))) {
+                col = col * 26 + (cellRef.charAt(i) - 'A' + 1);
+                i++;
+            }
+            col--; // Convert to 0-based
+            
+            // Parse row numbers
+            if (i < cellRef.length()) {
+                row = Integer.parseInt(cellRef.substring(i)) - 1; // Convert to 0-based
+            }
+            
+            return new CellPosition(row, col, value);
+        }
+    }
+    
+    // ===================== READER OPERATIONS =====================
+    
+    /**
+     * Excel Reader Builder
+     */
+    public static class ExcelReaderBuilder {
+        private final String fileName;
+        private final InputStream inputStream;
+        private Class<?> dataClass;
+        private int sheetIndex = 0;
+        private String sheetName;
+        private int headRowNumber = 1;
+        private boolean autoCloseStream = true;
+        
+        private ExcelReaderBuilder(String fileName) {
+            this.fileName = fileName;
+            this.inputStream = null;
+        }
+        
+        private ExcelReaderBuilder(InputStream inputStream) {
+            this.fileName = null;
+            this.inputStream = inputStream;
+        }
+        
+        public ExcelReaderBuilder dataClass(Class<?> dataClass) {
+            this.dataClass = dataClass;
+            return this;
+        }
+        
+        public ExcelReaderBuilder sheet(int sheetIndex) {
+            this.sheetIndex = sheetIndex;
+            return this;
+        }
+        
+        public ExcelReaderBuilder sheet(String sheetName) {
+            this.sheetName = sheetName;
+            return this;
+        }
+        
+        public ExcelReaderBuilder headRowNumber(int headRowNumber) {
+            this.headRowNumber = headRowNumber;
+            return this;
+        }
+        
+        public ExcelReaderBuilder autoCloseStream(boolean autoClose) {
+            this.autoCloseStream = autoClose;
+            return this;
+        }
+        
+        public <T> List<T> read() {
+            List<T> result = new ArrayList<>();
+            read(result::addAll);
+            return result;
+        }
+        
+        public <T> void read(Consumer<List<T>> dataConsumer) {
+            read(dataConsumer, 1000);
+        }
+        
+        public <T> void read(Consumer<List<T>> dataConsumer, int batchSize) {
+            com.alibaba.excel.read.builder.ExcelReaderBuilder builder = createReaderBuilder();
+            
+            try (ExcelReader excelReader = builder.build()) {
+                ReadSheet readSheet = createReadSheet();
+                
+                // Use PageReadListener for batch processing
+                PageReadListener<T> listener = new PageReadListener<>(dataConsumer, batchSize);
+                excelReader.read(readSheet);
+            }
+        }
+        
+        public List<Map<Integer, Object>> readAsMap() {
+            List<Map<Integer, Object>> result = new ArrayList<>();
+            
+            com.alibaba.excel.read.builder.ExcelReaderBuilder builder = createReaderBuilder();
+            
+            builder.registerReadListener(new AnalysisEventListener<Map<Integer, Object>>() {
+                @Override
+                public void invoke(Map<Integer, Object> data, AnalysisContext context) {
+                    result.add(data);
+                }
+                
+                @Override
+                public void doAfterAllAnalysed(AnalysisContext context) {
+                    // Do nothing
+                }
+            });
+            
+            try (ExcelReader excelReader = builder.build()) {
+                ReadSheet readSheet = createReadSheet();
+                excelReader.read(readSheet);
+            }
+            
+            return result;
+        }
+        
+        private com.alibaba.excel.read.builder.ExcelReaderBuilder createReaderBuilder() {
+            com.alibaba.excel.read.builder.ExcelReaderBuilder builder;
+            
+            if (fileName != null) {
+                builder = EasyExcel.read(fileName);
+            } else {
+                builder = EasyExcel.read(inputStream);
+                if (!autoCloseStream) {
+                    builder.autoCloseStream(false);
+                }
+            }
+            
+            if (dataClass != null) {
+                builder.head(dataClass);
+            }
+            
+            return builder;
+        }
+        
+        private ReadSheet createReadSheet() {
+            if (sheetName != null) {
+                return EasyExcel.readSheet(sheetName).headRowNumber(headRowNumber).build();
+            } else {
+                return EasyExcel.readSheet(sheetIndex).headRowNumber(headRowNumber).build();
+            }
+        }
+    }
+    
+    // ===================== UTILITY METHODS =====================
+    
+    /**
+     * Create writer for file
+     */
+    public static ExcelWriterBuilder writer(String fileName) {
+        return new ExcelWriterBuilder(fileName);
+    }
+    
+    /**
+     * Create writer for stream
+     */
+    public static ExcelWriterBuilder writer(OutputStream outputStream) {
+        return new ExcelWriterBuilder(outputStream);
+    }
+    
+    /**
+     * Create reader for file
+     */
+    public static ExcelReaderBuilder reader(String fileName) {
+        return new ExcelReaderBuilder(fileName);
+    }
+    
+    /**
+     * Create reader for stream
+     */
+    public static ExcelReaderBuilder reader(InputStream inputStream) {
+        return new ExcelReaderBuilder(inputStream);
+    }
+    
+    /**
+     * Create template fill builder
+     */
+    public static TemplateFillBuilder templateFill(String templatePath, String outputPath) {
+        return new TemplateFillBuilder(templatePath, outputPath);
+    }
+    
+    /**
+     * Create template fill builder with stream
+     */
+    public static TemplateFillBuilder templateFill(String templatePath, OutputStream outputStream) {
+        return new TemplateFillBuilder(templatePath, outputStream);
+    }
+    
+    /**
+     * Quick export
+     */
+    public static <T> void exportToExcel(List<T> data, String fileName, Class<T> clazz) {
+        writer(fileName)
+            .dataClass(clazz)
+            .defaultStyle()
+            .write(data);
+    }
+    
+    /**
+     * Quick import
+     */
+    public static <T> List<T> importFromExcel(String fileName, Class<T> clazz) {
+        return reader(fileName)
+            .dataClass(clazz)
+            .read();
+    }
+    
+    /**
+     * Convert objects to list of lists for raw data writing
+     */
+    public static <T> List<List<Object>> convertToListData(List<T> objects) {
+        if (objects.isEmpty()) {
+            return new ArrayList<>();
+        }
+        
+        List<List<Object>> result = new ArrayList<>();
+        Class<?> clazz = objects.get(0).getClass();
+        Field[] fields = clazz.getDeclaredFields();
+        
+        for (T obj : objects) {
+            List<Object> row = new ArrayList<>();
+            for (Field field : fields) {
+                try {
+                    field.setAccessible(true);
+                    Object value = field.get(obj);
+                    row.add(convertValue(value));
+                } catch (IllegalAccessException e) {
+                    row.add(null);
+                }
+            }
+            result.add(row);
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Generate headers from class
+     */
+    public static List<List<String>> generateHeaders(Class<?> clazz) {
+        Field[] fields = clazz.getDeclaredFields();
+        List<List<String>> headers = new ArrayList<>();
+        
+        for (Field field : fields) {
+            String headerName = camelCaseToTitle(field.getName());
+            headers.add(Collections.singletonList(headerName));
+        }
+        
+        return headers;
+    }
+    
+    // ===================== HELPER CLASSES =====================
+    
+    /**
+     * Cell position for custom cell writing
+     */
+    private static class CellPosition {
+        private final int row;
+        private final int col;
+        private final Object value;
+        
+        public CellPosition(int row, int col, Object value) {
+            this.row = row;
+            this.col = col;
+            this.value = value;
+        }
+        
+        // Getters
+        public int getRow() { return row; }
+        public int getCol() { return col; }
+        public Object getValue() { return value; }
+    }
+    
+    /**
+     * Custom cell write handler for writing individual cells
+     */
+    private static class CustomCellWriteHandler implements CellWriteHandler {
+        private final List<CellPosition> customCells;
+        
+        public CustomCellWriteHandler(List<CellPosition> customCells) {
+            this.customCells = customCells;
+        }
+        
+        @Override
+        public void afterCellDispose(CellWriteHandlerContext context) {
+            // Write custom cells after normal processing
+            Sheet sheet = context.getWriteSheetHolder().getSheet();
+            
+            for (CellPosition cellPos : customCells) {
+                Row row = sheet.getRow(cellPos.getRow());
+                if (row == null) {
+                    row = sheet.createRow(cellPos.getRow());
+                }
+                
+                Cell cell = row.getCell(cellPos.getCol());
+                if (cell == null) {
+                    cell = row.createCell(cellPos.getCol());
+                }
+                
+                setCellValue(cell, cellPos.getValue());
+            }
+        }
+        
+        private void setCellValue(Cell cell, Object value) {
+            if (value == null) {
+                cell.setCellValue("");
+            } else if (value instanceof Number) {
+                cell.setCellValue(((Number) value).doubleValue());
+            } else if (value instanceof Boolean) {
+                cell.setCellValue((Boolean) value);
+            } else if (value instanceof Date) {
+                cell.setCellValue((Date) value);
+            } else {
+                cell.setCellValue(value.toString());
+            }
+        }
+    }
+    
+    // ===================== HELPER METHODS =====================
+    
+    private static Object convertValue(Object value) {
+        if (value == null) {
+            return null;
+        } else if (value instanceof LocalDate) {
+            return ((LocalDate) value).format(DEFAULT_DATE_FORMAT);
+        } else if (value instanceof LocalDateTime) {
+            return ((LocalDateTime) value).format(DEFAULT_DATETIME_FORMAT);
+        } else {
+            return value;
+        }
+    }
+    
+    private static String camelCaseToTitle(String camelCase) {
+        return camelCase.replaceAll("([a-z])([A-Z])", "$1 $2")
+                       .substring(0, 1).toUpperCase() + 
+                       camelCase.replaceAll("([a-z])([A-Z])", "$1 $2").substring(1);
+    }
+}

@@ -1,0 +1,153 @@
+Cách sử dụng:
+1. Export CSV cơ bản:
+// Export đơn giản
+List<Employee> employees = getEmployees();
+EasyCSVUtils.exportToCSV(employees, "employees.csv", Employee.class);
+
+// Export với tùy chỉnh
+EasyCSVUtils.writer("employees.csv")
+    .dataClass(Employee.class)
+    .delimiter(";")  // Dùng semicolon cho Excel Việt Nam
+    .charset(StandardCharsets.UTF_8)
+    .includeHeaders(true)
+    .quoteAll(true)
+    .write(employees);
+2. Advanced CSV Writing:
+try (EasyCSVUtils.AdvancedCSVWriter writer = EasyCSVUtils.writer("report.csv")
+    .delimiter(",")
+    .quote("\"")
+    .includeHeaders(true)
+    .advancedWriter()) {
+    
+    // Ghi headers tùy chỉnh
+    writer.writeHeaders("Mã NV", "Họ tên", "Lương", "Phòng ban");
+    
+    // Ghi từng dòng
+    for (Employee emp : employees) {
+        writer.writeRow(emp.getId(), emp.getName(), emp.getSalary().toString(), emp.getDepartment());
+    }
+    
+    // Ghi dòng trống
+    writer.newLine();
+    
+    // Ghi tổng kết
+    writer.writeRow("", "Tổng cộng:", String.valueOf(totalSalary), "");
+    
+    // Ghi objects
+    writer.writeObjects(additionalData);
+}
+3. CSV Template Processing:
+Template file (report_template.csv):
+Báo cáo nhân sự,{{reportTitle}},{{date}}
+Công ty,{{companyName}},
+Tổng số nhân viên,{{totalEmployees}},
+
+Mã NV,Họ tên,Lương,Phòng ban
+{{employeeData}}
+
+Tổng lương,{{totalSalary}},
+Người tạo,{{createdBy}},{{createTime}}
+
+Java code:
+
+EasyCSVUtils.templateFill("report_template.csv", "final_report.csv")
+    .delimiter(",")
+    .charset(StandardCharsets.UTF_8)
+    .fillData("reportTitle", "Báo cáo tháng 12/2024")
+    .fillData("date", LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")))
+    .fillData("companyName", "CÔNG TY ABC")
+    .fillData("totalEmployees", employees.size())
+    .fillData("totalSalary", calculateTotalSalary(employees))
+    .fillData("createdBy", "Nguyễn Văn A")
+    .fillData("createTime", LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")))
+    // Thay thế placeholder bằng dữ liệu thực
+    .replaceCell("{{employeeData}}", generateEmployeeDataCSV(employees))
+    // Chèn dòng tùy chỉnh
+    .insertRowAt(5, "Ghi chú:", "Dữ liệu cập nhật đến", LocalDate.now().toString())
+    .execute();
+4. Complex Template with Custom Placeholders:
+// Sử dụng pattern tùy chỉnh
+EasyCSVUtils.templateFill("complex_template.csv", outputStream)
+    .placeholderPattern("\\$\\{(.*?)\\}")  // Dùng ${key} thay vì {{key}}
+    .fillData(Map.of(
+        "title", "BẢNG LƯƠNG THÁNG 12",
+        "department", "PHÒNG IT",
+        "manager", "Trần Văn B"
+    ))
+    .insertRowAt(0, "SỐ:", "12345", "", "NGÀY:", LocalDate.now().toString())
+    .insertRowAt(2, "", "", "", "", "")  // Dòng trống
+    .replaceCell("OLD_VALUE", "NEW_VALUE")
+    .execute();
+5. Reading CSV:
+// Đọc cơ bản
+List<Employee> employees = EasyCSVUtils.importFromCSV("employees.csv", Employee.class);
+
+// Đọc với tùy chỉnh
+List<Employee> result = EasyCSVUtils.reader("data.csv")
+    .dataClass(Employee.class)
+    .delimiter(";")
+    .charset(StandardCharsets.UTF_8)
+    .hasHeaders(true)
+    .skipLines(2)  // Bỏ qua 2 dòng đầu
+    .read();
+
+// Đọc theo batch (tiết kiệm memory)
+EasyCSVUtils.reader("large_file.csv")
+    .dataClass(Employee.class)
+    .hasHeaders(true)
+    .read(batch -> {
+        // Xử lý từng batch 1000 records
+        processEmployeeBatch(batch);
+    }, 1000);
+6. Reading as Raw Data:
+// Đọc thành List<List<String>>
+List<List<String>> rows = EasyCSVUtils.reader("data.csv")
+    .delimiter(",")
+    .quote("\"")
+    .hasHeaders(false)
+    .readAsRows();
+
+// Đọc thành Map (column-based)
+Map<String, List<String>> columnData = EasyCSVUtils.reader("data.csv")
+    .hasHeaders(true)
+    .readAsMap();
+
+// Đọc thành List<Map<String, String>> (row-based)
+List<Map<String, String>> mapList = EasyCSVUtils.csvToMapList("data.csv");
+7. Utilities:
+// Kiểm tra CSV hợp lệ
+boolean isValid = EasyCSVUtils.isValidCSV("data.csv");
+
+// Lấy thống kê
+EasyCSVUtils.CSVStatistics stats = EasyCSVUtils.getStatistics("data.csv");
+System.out.println("Rows: " + stats.getRows());
+System.out.println("Columns: " + stats.getColumns());
+
+// Convert object thành CSV string
+String csvString = EasyCSVUtils.objectsToCSV(employees, Employee.class);
+8. Xử lý với Stream (Web Application):
+@PostMapping("/export-csv")
+public void exportCSV(HttpServletResponse response) throws IOException {
+    response.setContentType("text/csv");
+    response.setCharacterEncoding("UTF-8");
+    response.setHeader("Content-Disposition", "attachment; filename=employees.csv");
+    
+    List<Employee> employees = employeeService.getAllEmployees();
+    
+    EasyCSVUtils.writer(response.getOutputStream())
+        .dataClass(Employee.class)
+        .delimiter(",")
+        .includeHeaders(true)
+        .autoCloseStream(false)
+        .write(employees);
+}
+Ưu điểm chính:
+Template Support: Xử lý template CSV với placeholder và custom insertion
+Flexible Writing: Ghi cell riêng lẻ, custom rows, mixed data
+Memory Efficient: Batch processing cho file lớn
+Encoding Support: Hỗ trợ đầy đủ các encoding
+Custom Delimiters: Hỗ trợ các delimiter khác nhau (, ; | tab)
+Quote Handling: Xử lý quote và escape characters chính xác
+Stream Support: Tối ưu cho web applications
+Validation: Kiểm tra tính hợp lệ và thống kê file
+Class này hỗ trợ toàn diện các tình huống CSV từ đơn giản đến phức tạp!

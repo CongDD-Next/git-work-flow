@@ -1,0 +1,113 @@
+Cách sử dụng:
+1. Export đơn giản:
+// Export cơ bản
+List<Employee> employees = getEmployees();
+EasyExcelUtils.exportToExcel(employees, "employees.xlsx", Employee.class);
+
+// Export với style tùy chỉnh
+EasyExcelUtils.writer("employees.xlsx")
+    .dataClass(Employee.class)
+    .sheetName("Danh sách nhân viên")
+    .defaultStyle()
+    .write(employees);
+2. Export nhiều sheet:
+try (EasyExcelUtils.AdvancedWriter writer = EasyExcelUtils.writer("report.xlsx")
+    .sheetName("Tổng quan")
+    .defaultStyle()
+    .advancedWriter()) {
+    
+    // Sheet 1: Nhân viên
+    writer.addSheet("Nhân viên", Employee.class)
+          .writeToSheet(1, employees);
+    
+    // Sheet 2: Phòng ban  
+    writer.addSheet("Phòng ban", Department.class)
+          .writeToSheet(2, departments);
+    
+    // Ghi cell riêng lẻ
+    writer.writeCellValue(0, 0, 0, "Báo cáo tháng 12/2024");
+}
+3. Sử dụng Template phức tạp:
+// Template với dữ liệu đơn và danh sách
+EasyExcelUtils.templateFill("template.xlsx", "output.xlsx")
+    .sheet("Report")
+    // Dữ liệu đơn
+    .fillData("title", "Báo cáo nhân sự")
+    .fillData("date", LocalDate.now())
+    .fillData("total", employees.size())
+    // Dữ liệu danh sách
+    .fillListData("employees", employees)
+    .fillListData("departments", departments)
+    // Ghi cell cụ thể (không theo template)
+    .writeCell("A1", "Tiêu đề tùy chỉnh")
+    .writeCell(5, 10, "Dữ liệu tại hàng 6, cột 11")
+    .autoDirection()
+    .execute();
+4. Template với merge cell và format phức tạp:
+// Tạo template trong code
+Map<String, Object> headerData = Map.of(
+    "companyName", "CÔNG TY ABC",
+    "reportTitle", "BÁO CÁO THÁNG",
+    "month", "12/2024",
+    "createdBy", "Nguyễn Văn A"
+);
+
+List<Map<String, Object>> detailData = employees.stream()
+    .map(emp -> Map.of(
+        "code", emp.getCode(),
+        "name", emp.getName(),
+        "salary", emp.getSalary(),
+        "department", emp.getDepartment()
+    ))
+    .collect(Collectors.toList());
+
+EasyExcelUtils.templateFill("complex_template.xlsx", outputStream)
+    .sheet("MainReport")
+    .fillData(headerData)
+    .fillListData("details", detailData)
+    // Ghi thêm cell tính toán
+    .writeCell("E2", "=SUM(E6:E" + (6 + detailData.size() - 1) + ")")
+    .writeCell("A1", "Tạo lúc: " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")))
+    .execute();
+5. Đọc dữ liệu:
+// Đọc đơn giản
+List<Employee> employees = EasyExcelUtils.importFromExcel("employees.xlsx", Employee.class);
+
+// Đọc với batch processing (tiết kiệm memory)
+EasyExcelUtils.reader("large_file.xlsx")
+    .dataClass(Employee.class)
+    .sheet("Data")
+    .headRowNumber(2)
+    .read(batch -> {
+        // Xử lý từng batch 1000 records
+        processEmployees(batch);
+    }, 1000);
+
+// Đọc dạng Map (không cần define class)
+List<Map<Integer, Object>> rawData = EasyExcelUtils.reader("data.xlsx")
+    .sheet(0)
+    .readAsMap();
+6. Xử lý Stream cho file lớn:
+// Ghi file lớn với stream
+try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+    EasyExcelUtils.writer(baos)
+        .dataClass(LargeDataRecord.class)
+        .autoCloseStream(false)
+        .defaultStyle()
+        .write(largeDataList);
+    
+    // Gửi qua HTTP response
+    response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    response.setHeader("Content-Disposition", "attachment; filename=data.xlsx");
+    response.getOutputStream().write(baos.toByteArray());
+}
+Ưu điểm chính:
+Template Support: Xử lý template phức tạp với merge cell, format có sẵn
+Flexible Cell Writing: Ghi cell riêng lẻ không theo quy tắc bảng
+Memory Efficient: Batch processing cho file lớn
+Multi-Sheet Support: Xử lý nhiều sheet dễ dàng
+Stream Support: Tối ưu cho web application
+Type Safe: Hỗ trợ Generic và reflection
+Builder Pattern: API dễ đọc và mở rộng
+Auto Resource Management: Tự động đóng file/stream
+Class này hỗ trợ đầy đủ các tình huống từ đơn giản đến phức tạp nhất với EasyExcel!

@@ -1,0 +1,544 @@
+package com.yourpackage.utils;
+
+import org.dhatim.fastexcel.Workbook;
+import org.dhatim.fastexcel.Worksheet;
+import org.dhatim.fastexcel.reader.ReadableWorkbook;
+import org.dhatim.fastexcel.reader.Row;
+import org.dhatim.fastexcel.reader.Sheet;
+
+import java.io.*;
+import java.lang.reflect.Field;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Stream;
+
+/**
+ * Excel Utilities for FastExcel Library
+ * 
+ * @author Expert Developer
+ * @version 1.0
+ * @since 2024
+ */
+public class ExcelUtils {
+    
+    private static final DateTimeFormatter DEFAULT_DATE_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    private static final DateTimeFormatter DEFAULT_DATETIME_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
+    
+    // ===================== WRITER SECTION =====================
+    
+    /**
+     * Builder pattern for Excel writing
+     */
+    public static class ExcelWriterBuilder {
+        private final OutputStream outputStream;
+        private String sheetName = "Sheet1";
+        private Map<String, Object> headers = new LinkedHashMap<>();
+        private List<Map<String, Object>> data = new ArrayList<>();
+        private Map<String, CellStyle> columnStyles = new HashMap<>();
+        private boolean autoSizeColumns = true;
+        private boolean freezeHeader = true;
+        
+        private ExcelWriterBuilder(OutputStream outputStream) {
+            this.outputStream = outputStream;
+        }
+        
+        public ExcelWriterBuilder sheetName(String sheetName) {
+            this.sheetName = sheetName;
+            return this;
+        }
+        
+        public ExcelWriterBuilder headers(String... headers) {
+            for (int i = 0; i < headers.length; i++) {
+                this.headers.put(String.valueOf(i), headers[i]);
+            }
+            return this;
+        }
+        
+        public ExcelWriterBuilder headers(Map<String, String> headers) {
+            this.headers.putAll(headers);
+            return this;
+        }
+        
+        public ExcelWriterBuilder data(List<Map<String, Object>> data) {
+            this.data = data;
+            return this;
+        }
+        
+        public <T> ExcelWriterBuilder dataFromObjects(List<T> objects) {
+            this.data = convertObjectsToMaps(objects);
+            return this;
+        }
+        
+        public ExcelWriterBuilder columnStyle(String column, CellStyle style) {
+            this.columnStyles.put(column, style);
+            return this;
+        }
+        
+        public ExcelWriterBuilder autoSizeColumns(boolean autoSize) {
+            this.autoSizeColumns = autoSize;
+            return this;
+        }
+        
+        public ExcelWriterBuilder freezeHeader(boolean freeze) {
+            this.freezeHeader = freeze;
+            return this;
+        }
+        
+        public void write() throws IOException {
+            try (Workbook workbook = new Workbook(outputStream, "MyApp", "1.0")) {
+                Worksheet worksheet = workbook.newWorksheet(sheetName);
+                
+                // Write headers
+                writeHeaders(worksheet);
+                
+                // Write data
+                writeData(worksheet);
+                
+                // Apply styles and formatting
+                applyFormatting(worksheet);
+                
+                workbook.finish();
+            }
+        }
+        
+        private void writeHeaders(Worksheet worksheet) {
+            int col = 0;
+            for (Map.Entry<String, Object> header : headers.entrySet()) {
+                worksheet.value(0, col, header.getValue());
+                worksheet.style(0, col).bold().fillColor("E0E0E0").set();
+                col++;
+            }
+            
+            if (freezeHeader) {
+                worksheet.freezePane(0, 1);
+            }
+        }
+        
+        private void writeData(Worksheet worksheet) {
+            for (int row = 0; row < data.size(); row++) {
+                Map<String, Object> rowData = data.get(row);
+                int col = 0;
+                
+                for (String key : headers.keySet()) {
+                    Object value = rowData.get(key);
+                    setCellValue(worksheet, row + 1, col, value);
+                    
+                    // Apply column style if exists
+                    CellStyle style = columnStyles.get(key);
+                    if (style != null) {
+                        applyCellStyle(worksheet, row + 1, col, style);
+                    }
+                    
+                    col++;
+                }
+            }
+        }
+        
+        private void applyFormatting(Worksheet worksheet) {
+            if (autoSizeColumns) {
+                // FastExcel doesn't support auto-size directly
+                // Set reasonable column widths
+                for (int col = 0; col < headers.size(); col++) {
+                    worksheet.width(col, 15);
+                }
+            }
+        }
+    }
+    
+    // ===================== READER SECTION =====================
+    
+    /**
+     * Builder pattern for Excel reading
+     */
+    public static class ExcelReaderBuilder {
+        private final InputStream inputStream;
+        private String sheetName;
+        private int sheetIndex = 0;
+        private int headerRow = 0;
+        private int startRow = 1;
+        private Map<String, String> columnMapping = new HashMap<>();
+        private boolean skipEmptyRows = true;
+        
+        private ExcelReaderBuilder(InputStream inputStream) {
+            this.inputStream = inputStream;
+        }
+        
+        public ExcelReaderBuilder sheetName(String sheetName) {
+            this.sheetName = sheetName;
+            return this;
+        }
+        
+        public ExcelReaderBuilder sheetIndex(int sheetIndex) {
+            this.sheetIndex = sheetIndex;
+            return this;
+        }
+        
+        public ExcelReaderBuilder headerRow(int headerRow) {
+            this.headerRow = headerRow;
+            return this;
+        }
+        
+        public ExcelReaderBuilder startRow(int startRow) {
+            this.startRow = startRow;
+            return this;
+        }
+        
+        public ExcelReaderBuilder columnMapping(Map<String, String> mapping) {
+            this.columnMapping = mapping;
+            return this;
+        }
+        
+        public ExcelReaderBuilder skipEmptyRows(boolean skip) {
+            this.skipEmptyRows = skip;
+            return this;
+        }
+        
+        public List<Map<String, Object>> read() throws IOException {
+            try (ReadableWorkbook workbook = new ReadableWorkbook(inputStream)) {
+                Sheet sheet = getSheet(workbook);
+                return readDataFromSheet(sheet);
+            }
+        }
+        
+        public <T> List<T> readAsObjects(Class<T> clazz) throws IOException {
+            List<Map<String, Object>> data = read();
+            return convertMapsToObjects(data, clazz);
+        }
+        
+        private Sheet getSheet(ReadableWorkbook workbook) throws IOException {
+            if (sheetName != null) {
+                return workbook.findSheet(sheetName)
+                    .orElseThrow(() -> new IllegalArgumentException("Sheet not found: " + sheetName));
+            }
+            return workbook.getSheet(sheetIndex)
+                .orElseThrow(() -> new IllegalArgumentException("Sheet not found at index: " + sheetIndex));
+        }
+        
+        private List<Map<String, Object>> readDataFromSheet(Sheet sheet) throws IOException {
+            List<String> headers = readHeaders(sheet);
+            List<Map<String, Object>> result = new ArrayList<>();
+            
+            try (Stream<Row> rows = sheet.openStream()) {
+                rows.skip(startRow).forEach(row -> {
+                    Map<String, Object> rowData = new LinkedHashMap<>();
+                    boolean hasData = false;
+                    
+                    for (int col = 0; col < headers.size(); col++) {
+                        String header = headers.get(col);
+                        Object value = getCellValue(row, col);
+                        
+                        if (value != null && !value.toString().trim().isEmpty()) {
+                            hasData = true;
+                        }
+                        
+                        // Apply column mapping if exists
+                        String mappedHeader = columnMapping.getOrDefault(header, header);
+                        rowData.put(mappedHeader, value);
+                    }
+                    
+                    if (!skipEmptyRows || hasData) {
+                        result.add(rowData);
+                    }
+                });
+            }
+            
+            return result;
+        }
+        
+        private List<String> readHeaders(Sheet sheet) throws IOException {
+            List<String> headers = new ArrayList<>();
+            
+            try (Stream<Row> rows = sheet.openStream()) {
+                Optional<Row> headerRowOpt = rows.skip(headerRow).findFirst();
+                if (headerRowOpt.isPresent()) {
+                    Row headerRowData = headerRowOpt.get();
+                    
+                    for (int col = 0; col < headerRowData.getCellCount(); col++) {
+                        String header = getCellValueAsString(headerRowData, col);
+                        headers.add(header != null ? header : "Column_" + col);
+                    }
+                }
+            }
+            
+            return headers;
+        }
+    }
+    
+    // ===================== UTILITY METHODS =====================
+    
+    /**
+     * Create a new Excel writer
+     */
+    public static ExcelWriterBuilder writer(OutputStream outputStream) {
+        return new ExcelWriterBuilder(outputStream);
+    }
+    
+    /**
+     * Create a new Excel writer for file
+     */
+    public static ExcelWriterBuilder writer(String filePath) throws FileNotFoundException {
+        return new ExcelWriterBuilder(new FileOutputStream(filePath));
+    }
+    
+    /**
+     * Create a new Excel reader
+     */
+    public static ExcelReaderBuilder reader(InputStream inputStream) {
+        return new ExcelReaderBuilder(inputStream);
+    }
+    
+    /**
+     * Create a new Excel reader for file
+     */
+    public static ExcelReaderBuilder reader(String filePath) throws FileNotFoundException {
+        return new ExcelReaderBuilder(new FileInputStream(filePath));
+    }
+    
+    /**
+     * Quick export to Excel
+     */
+    public static <T> void exportToExcel(List<T> data, String filePath) throws IOException {
+        exportToExcel(data, filePath, "Data");
+    }
+    
+    /**
+     * Quick export to Excel with sheet name
+     */
+    public static <T> void exportToExcel(List<T> data, String filePath, String sheetName) throws IOException {
+        if (data.isEmpty()) {
+            throw new IllegalArgumentException("Data list cannot be empty");
+        }
+        
+        // Get headers from first object
+        T firstObject = data.get(0);
+        Map<String, String> headers = getFieldNames(firstObject.getClass());
+        
+        writer(filePath)
+            .sheetName(sheetName)
+            .headers(headers)
+            .dataFromObjects(data)
+            .write();
+    }
+    
+    /**
+     * Quick import from Excel
+     */
+    public static <T> List<T> importFromExcel(String filePath, Class<T> clazz) throws IOException {
+        return reader(filePath).readAsObjects(clazz);
+    }
+    
+    // ===================== HELPER METHODS =====================
+    
+    private static void setCellValue(Worksheet worksheet, int row, int col, Object value) {
+        if (value == null) {
+            worksheet.value(row, col, "");
+        } else if (value instanceof Number) {
+            worksheet.value(row, col, ((Number) value).doubleValue());
+        } else if (value instanceof Date) {
+            worksheet.value(row, col, (Date) value);
+        } else if (value instanceof LocalDate) {
+            worksheet.value(row, col, ((LocalDate) value).format(DEFAULT_DATE_FORMAT));
+        } else if (value instanceof LocalDateTime) {
+            worksheet.value(row, col, ((LocalDateTime) value).format(DEFAULT_DATETIME_FORMAT));
+        } else if (value instanceof Boolean) {
+            worksheet.value(row, col, (Boolean) value);
+        } else {
+            worksheet.value(row, col, value.toString());
+        }
+    }
+    
+    private static void applyCellStyle(Worksheet worksheet, int row, int col, CellStyle style) {
+        var cellStyle = worksheet.style(row, col);
+        
+        if (style.isBold()) cellStyle.bold();
+        if (style.isItalic()) cellStyle.italic();
+        if (style.getFillColor() != null) cellStyle.fillColor(style.getFillColor());
+        if (style.getFontColor() != null) cellStyle.fontColor(style.getFontColor());
+        if (style.getFontSize() > 0) cellStyle.fontSize(style.getFontSize());
+        
+        cellStyle.set();
+    }
+    
+    private static Object getCellValue(Row row, int col) {
+        try {
+            if (col >= row.getCellCount()) {
+                return null;
+            }
+            
+            var cell = row.getCell(col);
+            if (cell == null) {
+                return null;
+            }
+            
+            switch (cell.getType()) {
+                case NUMBER:
+                    return cell.asNumber();
+                case STRING:
+                    return cell.asString();
+                case BOOLEAN:
+                    return cell.asBoolean();
+                case FORMULA:
+                    return cell.getFormula();
+                case ERROR:
+                    return "#ERROR";
+                case EMPTY:
+                default:
+                    return null;
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+    
+    private static String getCellValueAsString(Row row, int col) {
+        Object value = getCellValue(row, col);
+        return value != null ? value.toString().trim() : null;
+    }
+    
+    private static <T> List<Map<String, Object>> convertObjectsToMaps(List<T> objects) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        
+        for (T obj : objects) {
+            Map<String, Object> map = new LinkedHashMap<>();
+            
+            for (Field field : obj.getClass().getDeclaredFields()) {
+                try {
+                    field.setAccessible(true);
+                    Object value = field.get(obj);
+                    map.put(field.getName(), value);
+                } catch (IllegalAccessException e) {
+                    map.put(field.getName(), null);
+                }
+            }
+            
+            result.add(map);
+        }
+        
+        return result;
+    }
+    
+    private static <T> List<T> convertMapsToObjects(List<Map<String, Object>> maps, Class<T> clazz) {
+        List<T> result = new ArrayList<>();
+        
+        for (Map<String, Object> map : maps) {
+            try {
+                T obj = clazz.getDeclaredConstructor().newInstance();
+                
+                for (Field field : clazz.getDeclaredFields()) {
+                    field.setAccessible(true);
+                    Object value = map.get(field.getName());
+                    
+                    if (value != null) {
+                        Object convertedValue = convertValue(value, field.getType());
+                        field.set(obj, convertedValue);
+                    }
+                }
+                
+                result.add(obj);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to convert map to object", e);
+            }
+        }
+        
+        return result;
+    }
+    
+    private static Object convertValue(Object value, Class<?> targetType) {
+        if (value == null || targetType.isAssignableFrom(value.getClass())) {
+            return value;
+        }
+        
+        String stringValue = value.toString().trim();
+        
+        if (targetType == String.class) {
+            return stringValue;
+        } else if (targetType == Integer.class || targetType == int.class) {
+            return stringValue.isEmpty() ? 0 : Integer.parseInt(stringValue);
+        } else if (targetType == Long.class || targetType == long.class) {
+            return stringValue.isEmpty() ? 0L : Long.parseLong(stringValue);
+        } else if (targetType == Double.class || targetType == double.class) {
+            return stringValue.isEmpty() ? 0.0 : Double.parseDouble(stringValue);
+        } else if (targetType == BigDecimal.class) {
+            return stringValue.isEmpty() ? BigDecimal.ZERO : new BigDecimal(stringValue);
+        } else if (targetType == Boolean.class || targetType == boolean.class) {
+            return Boolean.parseBoolean(stringValue);
+        } else if (targetType == LocalDate.class) {
+            return stringValue.isEmpty() ? null : LocalDate.parse(stringValue, DEFAULT_DATE_FORMAT);
+        } else if (targetType == LocalDateTime.class) {
+            return stringValue.isEmpty() ? null : LocalDateTime.parse(stringValue, DEFAULT_DATETIME_FORMAT);
+        }
+        
+        return value;
+    }
+    
+    private static Map<String, String> getFieldNames(Class<?> clazz) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        
+        for (Field field : clazz.getDeclaredFields()) {
+            String fieldName = field.getName();
+            String headerName = camelCaseToTitle(fieldName);
+            headers.put(fieldName, headerName);
+        }
+        
+        return headers;
+    }
+    
+    private static String camelCaseToTitle(String camelCase) {
+        return camelCase.replaceAll("([a-z])([A-Z])", "$1 $2")
+                       .substring(0, 1).toUpperCase() + 
+                       camelCase.replaceAll("([a-z])([A-Z])", "$1 $2").substring(1);
+    }
+    
+    // ===================== INNER CLASSES =====================
+    
+    /**
+     * Cell styling configuration
+     */
+    public static class CellStyle {
+        private boolean bold = false;
+        private boolean italic = false;
+        private String fillColor;
+        private String fontColor;
+        private int fontSize = 0;
+        
+        public static CellStyle create() {
+            return new CellStyle();
+        }
+        
+        public CellStyle bold() {
+            this.bold = true;
+            return this;
+        }
+        
+        public CellStyle italic() {
+            this.italic = true;
+            return this;
+        }
+        
+        public CellStyle fillColor(String color) {
+            this.fillColor = color;
+            return this;
+        }
+        
+        public CellStyle fontColor(String color) {
+            this.fontColor = color;
+            return this;
+        }
+        
+        public CellStyle fontSize(int size) {
+            this.fontSize = size;
+            return this;
+        }
+        
+        // Getters
+        public boolean isBold() { return bold; }
+        public boolean isItalic() { return italic; }
+        public String getFillColor() { return fillColor; }
+        public String getFontColor() { return fontColor; }
+        public int getFontSize() { return fontSize; }
+    }
+}
