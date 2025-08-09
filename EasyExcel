@@ -4,12 +4,10 @@ import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.ExcelReader;
 import com.alibaba.excel.ExcelWriter;
 import com.alibaba.excel.context.AnalysisContext;
-import com.alibaba.excel.enums.CellDataTypeEnum;
+import com.alibaba.excel.enums.WriteDirectionEnum;
 import com.alibaba.excel.event.AnalysisEventListener;
-import com.alibaba.excel.metadata.data.*;
 import com.alibaba.excel.read.listener.PageReadListener;
 import com.alibaba.excel.read.metadata.ReadSheet;
-import com.alibaba.excel.util.ListUtils;
 import com.alibaba.excel.write.builder.ExcelWriterBuilder;
 import com.alibaba.excel.write.builder.ExcelWriterSheetBuilder;
 import com.alibaba.excel.write.handler.CellWriteHandler;
@@ -38,9 +36,10 @@ import java.util.stream.Collectors;
 
 /**
  * Comprehensive EasyExcel Utilities for Advanced Excel Operations
+ * Fixed for EasyExcel v4.0.3 compatibility
  * 
  * @author Expert Developer
- * @version 1.0
+ * @version 1.1
  * @since 2024
  */
 @Slf4j
@@ -59,7 +58,7 @@ public class EasyExcelUtils {
         private final OutputStream outputStream;
         private String sheetName = "Sheet1";
         private Class<?> dataClass;
-        private List<List<Object>> headList;
+        private List<List<String>> headList;
         private boolean autoCloseStream = true;
         private List<CellWriteHandler> writeHandlers = new ArrayList<>();
         private HorizontalCellStyleStrategy styleStrategy;
@@ -92,9 +91,10 @@ public class EasyExcelUtils {
         }
         
         public ExcelWriterBuilder headers(List<List<String>> complexHeaders) {
-            this.headList = complexHeaders.stream()
-                .map(ArrayList::new)
-                .collect(Collectors.toList());
+            this.headList = new ArrayList<>();
+            for (List<String> headerRow : complexHeaders) {
+                this.headList.add(new ArrayList<>(headerRow));
+            }
             return this;
         }
         
@@ -142,15 +142,29 @@ public class EasyExcelUtils {
                 builder.registerWriteHandler(styleStrategy);
             }
             
-            writeHandlers.forEach(builder::registerWriteHandler);
+            for (CellWriteHandler handler : writeHandlers) {
+                builder.registerWriteHandler(handler);
+            }
             
             try (ExcelWriter excelWriter = builder.build()) {
-                WriteSheet writeSheet = EasyExcel.writerSheet(0, sheetName)
-                    .head(headList)
-                    .build();
+                WriteSheet writeSheet;
                 
                 if (dataClass != null) {
-                    writeSheet = EasyExcel.writerSheet(0, sheetName, dataClass).build();
+                    writeSheet = EasyExcel.writerSheet(0, sheetName)
+                        .head(dataClass)
+                        .build();
+                } else if (headList != null) {
+                    // Convert List<List<String>> to List<List<Object>>
+                    List<List<Object>> objectHeaders = new ArrayList<>();
+                    for (List<String> headerRow : headList) {
+                        List<Object> objectRow = new ArrayList<>(headerRow);
+                        objectHeaders.add(objectRow);
+                    }
+                    writeSheet = EasyExcel.writerSheet(0, sheetName)
+                        .head(objectHeaders)
+                        .build();
+                } else {
+                    writeSheet = EasyExcel.writerSheet(0, sheetName).build();
                 }
                 
                 excelWriter.write(data, writeSheet);
@@ -165,7 +179,7 @@ public class EasyExcelUtils {
             if (fileName != null) {
                 return EasyExcel.write(fileName);
             } else {
-                var builder = EasyExcel.write(outputStream);
+                com.alibaba.excel.write.builder.ExcelWriterBuilder builder = EasyExcel.write(outputStream);
                 return autoCloseStream ? builder : builder.autoCloseStream(false);
             }
         }
@@ -186,17 +200,29 @@ public class EasyExcelUtils {
                 easyBuilder.registerWriteHandler(builder.styleStrategy);
             }
             
-            builder.writeHandlers.forEach(easyBuilder::registerWriteHandler);
+            for (CellWriteHandler handler : builder.writeHandlers) {
+                easyBuilder.registerWriteHandler(handler);
+            }
             
             this.excelWriter = easyBuilder.build();
             
             // Create default sheet
-            WriteSheet defaultSheet = EasyExcel.writerSheet(0, builder.sheetName)
-                .head(builder.headList)
-                .build();
-            
+            WriteSheet defaultSheet;
             if (builder.dataClass != null) {
-                defaultSheet = EasyExcel.writerSheet(0, builder.sheetName, builder.dataClass).build();
+                defaultSheet = EasyExcel.writerSheet(0, builder.sheetName)
+                    .head(builder.dataClass)
+                    .build();
+            } else if (builder.headList != null) {
+                List<List<Object>> objectHeaders = new ArrayList<>();
+                for (List<String> headerRow : builder.headList) {
+                    List<Object> objectRow = new ArrayList<>(headerRow);
+                    objectHeaders.add(objectRow);
+                }
+                defaultSheet = EasyExcel.writerSheet(0, builder.sheetName)
+                    .head(objectHeaders)
+                    .build();
+            } else {
+                defaultSheet = EasyExcel.writerSheet(0, builder.sheetName).build();
             }
             
             sheets.put(0, defaultSheet);
@@ -204,15 +230,22 @@ public class EasyExcelUtils {
         
         public AdvancedWriter addSheet(String sheetName, Class<?> dataClass) {
             currentSheetIndex++;
-            WriteSheet sheet = EasyExcel.writerSheet(currentSheetIndex, sheetName, dataClass).build();
+            WriteSheet sheet = EasyExcel.writerSheet(currentSheetIndex, sheetName)
+                .head(dataClass)
+                .build();
             sheets.put(currentSheetIndex, sheet);
             return this;
         }
         
         public AdvancedWriter addSheet(String sheetName, List<List<String>> headers) {
             currentSheetIndex++;
+            List<List<Object>> objectHeaders = new ArrayList<>();
+            for (List<String> headerRow : headers) {
+                List<Object> objectRow = new ArrayList<>(headerRow);
+                objectHeaders.add(objectRow);
+            }
             WriteSheet sheet = EasyExcel.writerSheet(currentSheetIndex, sheetName)
-                .head(headers.stream().map(ArrayList::new).collect(Collectors.toList()))
+                .head(objectHeaders)
                 .build();
             sheets.put(currentSheetIndex, sheet);
             return this;
@@ -314,7 +347,9 @@ public class EasyExcelUtils {
         
         public TemplateFillBuilder autoDirection() {
             if (fillConfig == null) {
-                fillConfig = FillConfig.builder().direction(WriteDirectionEnum.VERTICAL).build();
+                fillConfig = FillConfig.builder()
+                    .direction(WriteDirectionEnum.VERTICAL)
+                    .build();
             }
             return this;
         }
@@ -355,7 +390,11 @@ public class EasyExcelUtils {
                     // Fill list data
                     for (Map.Entry<String, List<?>> entry : listData.entrySet()) {
                         FillWrapper fillWrapper = new FillWrapper(entry.getKey(), entry.getValue());
-                        excelWriter.fill(fillWrapper, fillConfig, writeSheet);
+                        if (fillConfig != null) {
+                            excelWriter.fill(fillWrapper, fillConfig, writeSheet);
+                        } else {
+                            excelWriter.fill(fillWrapper, writeSheet);
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -438,7 +477,8 @@ public class EasyExcelUtils {
         
         public <T> List<T> read() {
             List<T> result = new ArrayList<>();
-            read(result::addAll);
+            Consumer<List<T>> consumer = data -> result.addAll(data);
+            read(consumer);
             return result;
         }
         
@@ -569,7 +609,7 @@ public class EasyExcelUtils {
      * Quick import
      */
     public static <T> List<T> importFromExcel(String fileName, Class<T> clazz) {
-        return reader(fileName)
+        return EasyExcelUtils.<T>reader(fileName)
             .dataClass(clazz)
             .read();
     }
